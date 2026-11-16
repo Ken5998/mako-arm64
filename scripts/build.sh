@@ -77,7 +77,7 @@ cmake -S "$src/engine" -B "$work/cmake" -G Ninja \
   -DCMAKE_CXX_COMPILER="${CXX:-clang++}" \
   -DCMAKE_INSTALL_PREFIX="$stage" \
   -DCMAKE_INSTALL_LIBDIR=lib \
-  -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc" \
+  -DCMAKE_SHARED_LINKER_FLAGS="-static-libstdc++ -static-libgcc -Wl,--exclude-libs,ALL" \
   -DBUILD_TESTING="$testing" \
   -DMAKO_VULKAN_HEADERS_INCLUDE_DIR="$headers/include" \
   -DMAKO_BUILD_VK_LAYER=ON \

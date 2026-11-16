@@ -27,6 +27,11 @@ jobs:
         env:
           MAKO_TESTS: "1"
           QT_QPA_PLATFORM: offscreen
+          # Three upstream tests cover x86-only parts and cannot pass here:
+          # MangoHud staging (mako-launch looks for x86 MangoHud manifests
+          # only), Remote Play (needs the x86_64 Steam streaming client) and
+          # the Arch Linux x86_64 package contract (needs Node.js).
+          CTEST_ARGS: -E ^(standalone-mangohud|remote-play-command|arch-package-contract)$
         run: scripts/build.sh out
       - name: Install with upstream's installer
         run: |
@@ -42,15 +47,26 @@ jobs:
           Xvfb :99 -screen 0 1280x720x24 &
           sleep 2
           export DISPLAY=:99
+          # Mesa's software driver may lack the external semaphores MAKO
+          # shares with its generator (every GPU driver, Turnip included, has
+          # them). Then the layer keeps the game's own device and frames, and
+          # the Scaling profile refuses to start, which is MAKO's design.
+          missing="failed to get device proc addr for vkImportSemaphoreFdKHR"
           run() {
             name="$1"; shift
-            env "$@" ~/.local/bin/mako-launch timeout 60 vkcube --c 600 > "/tmp/vkcube-$name.txt" 2>&1 || {
-              status=$?; cat "/tmp/vkcube-$name.txt"; echo "vkcube $name failed ($status)"; exit 1; }
+            status=0
+            env "$@" ~/.local/bin/mako-launch timeout 60 vkcube --c 600 > "/tmp/vkcube-$name.txt" 2>&1 || status=$?
             cat "/tmp/vkcube-$name.txt"
             grep -q "MAKO Renderer: render layer active" "/tmp/vkcube-$name.txt"
+            if grep -q "$missing" "/tmp/vkcube-$name.txt"; then
+              echo "::notice::$name: the software driver has no external semaphores, MAKO kept the native path"
+              [ "$name" = scaler ] || [ "$status" = 0 ]
+            else
+              [ "$status" = 0 ]
+            fi
           }
           # MAKO FG's host is x86-64 and needs FEX, which this runner lacks:
-          # the layer must report it and keep presenting the real frames.
+          # the layer must say so and keep presenting the real frames.
           run fg-2x MAKO_ENV=1 MAKO_MULTIPLIER=2 MAKO_FRAME_GENERATION_MODEL=mako-fg
           run scaler MAKO_ENV=1 MAKO_FRAME_GENERATION_ENABLED=0 MAKO_SCALING_ENABLED=1 \
             MAKO_SCALING_METHOD=mako MAKO_SCALING_FACTOR=1.5
