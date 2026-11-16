@@ -1,0 +1,72 @@
+name: Release
+
+# Builds the MAKO Renderer for aarch64 and publishes it as release vVERSION
+# (the VERSION file).
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  renderer:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 60
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf -y install git curl tar gzip findutils binutils python3 clang cmake ninja-build \
+            libstdc++-static libX11-devel libxcb-devel mesa-libGL-devel qt6-qtdeclarative-devel
+      - uses: actions/checkout@v5
+      - name: Build
+        run: scripts/build.sh out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mako-renderer-arm64
+          path: out/*.tar.gz
+
+  publish:
+    needs: renderer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: mako-renderer-arm64
+          path: out
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          upstream="$(python3 -c 'import json; print(json.load(open("upstream.json"))["mako"]["tag"])')"
+          fg="$(python3 -c 'import json; print(json.load(open("upstream.json"))["mako_fg"]["version"])')"
+          archive="$(ls out/MAKO-Renderer-*-linux-arm64.tar.gz)"
+          name="$(basename "$archive")"
+          sha256="$(sha256sum "$archive" | cut -d' ' -f1)"
+          scripts/release-notes.sh "v$version" > notes.md
+          cat >> notes.md <<NOTES
+          ## Install on the Retroid Pocket 6
+
+          This is MAKO's own Renderer ($upstream, with MAKO FG $fg) built natively for ArmadaOS. It is not an official MAKO release, and the MAKO Decky plugin stays off on ArmadaOS: use the steps below instead.
+
+          1. In Desktop Mode, download \`$name\`, extract it and open **Install MAKO Renderer** inside. It installs into ~/.local and opens **MAKO Renderer Configuration**, where you make a profile per game.
+          2. In Steam, put MAKO's launcher in front of the game's launch options:
+             \`~/.local/bin/mako-launch /usr/libexec/armada/armada-game-launch %command%\`
+          3. Start the game from Steam. For a quick test without a profile, add \`MAKO_ENV=1 MAKO_MULTIPLIER=2\` at the start of the launch options.
+
+          It works for native ARM64 ports and Proton ARM64 games, whose Vulkan runs as aarch64. MAKO FG runs its x86-64 program through FEX, so keep **Host Vulkan** on in Armada Control's host thunks for that game; the Lossless Scaling models need your own Lossless Scaling from Steam. Shaders and MangoHud through mako-launch are not in this build yet.
+
+          SHA-256: \`$sha256\`
+          NOTES
+          if gh release view "v$version" > /dev/null 2>&1; then
+            gh release upload "v$version" "$archive" --clobber
+            gh release edit "v$version" --notes-file notes.md
+          else
+            gh release create "v$version" "$archive" --title "MAKO Renderer for ARM64 $version" \
+              --notes-file notes.md --target "$GITHUB_SHA"
+          fi
