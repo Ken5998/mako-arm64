@@ -1,0 +1,60 @@
+name: CI
+
+# Builds the MAKO Renderer on an aarch64 runner in Fedora 44, the base of
+# ArmadaOS, runs upstream's own tests on it, installs the package with
+# upstream's installer and runs vkcube through mako-launch on Mesa's software
+# Vulkan driver: once with frame generation, once with MAKO Scaler.
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  renderer:
+    runs-on: ubuntu-24.04-arm
+    container: registry.fedoraproject.org/fedora:44
+    timeout-minutes: 90
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf -y install git curl tar gzip findutils binutils python3 clang cmake ninja-build \
+            libstdc++-static libX11-devel libxcb-devel mesa-libGL-devel qt6-qtdeclarative-devel \
+            mesa-vulkan-drivers vulkan-loader vulkan-tools xorg-x11-server-Xvfb
+      - uses: actions/checkout@v5
+      - name: Check the scripts
+        run: bash -n scripts/*.sh
+      - name: Build and run upstream's tests
+        env:
+          MAKO_TESTS: "1"
+          QT_QPA_PLATFORM: offscreen
+        run: scripts/build.sh out
+      - name: Install with upstream's installer
+        run: |
+          tar -xzf out/MAKO-Renderer-*-linux-arm64.tar.gz -C /tmp
+          cd /tmp/MAKO-Renderer-*-linux-arm64
+          MAKO_INSTALLER_ASSUME_YES=1 MAKO_INSTALLER_NO_LAUNCH=1 "./Install MAKO Renderer"
+          test -x ~/.local/bin/mako-launch
+          test -f ~/.local/lib/libmako-render.so
+          test -x ~/.local/lib/mako-fg/mako-fg-host
+          ~/.local/bin/mako-cli --help > /dev/null
+      - name: Run vkcube through mako-launch
+        run: |
+          Xvfb :99 -screen 0 1280x720x24 &
+          sleep 2
+          export DISPLAY=:99
+          run() {
+            name="$1"; shift
+            env "$@" ~/.local/bin/mako-launch timeout 60 vkcube --c 600 > "/tmp/vkcube-$name.txt" 2>&1 || {
+              status=$?; cat "/tmp/vkcube-$name.txt"; echo "vkcube $name failed ($status)"; exit 1; }
+            cat "/tmp/vkcube-$name.txt"
+            grep -q "MAKO Renderer: render layer active" "/tmp/vkcube-$name.txt"
+          }
+          # MAKO FG's host is x86-64 and needs FEX, which this runner lacks:
+          # the layer must report it and keep presenting the real frames.
+          run fg-2x MAKO_ENV=1 MAKO_MULTIPLIER=2 MAKO_FRAME_GENERATION_MODEL=mako-fg
+          run scaler MAKO_ENV=1 MAKO_FRAME_GENERATION_ENABLED=0 MAKO_SCALING_ENABLED=1 \
+            MAKO_SCALING_METHOD=mako MAKO_SCALING_FACTOR=1.5
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mako-renderer-arm64
+          path: out/*.tar.gz
